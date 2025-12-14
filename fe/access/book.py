@@ -55,10 +55,10 @@ class BookDB:
     def __init__(self, use_large_db=True):
         try:
             # 默认的 MySQL 数据库配置
-            self.host = "172.25.139.100"
-            self.port = 3306
+            self.host = "xxxx"
+            self.port = xxx
             self.user = "root"
-            self.password = "WXRrr20050811"
+            self.password = "xxxxx"
             self.database = "bookstore"
 
             # print(f"DEBUG: Attempting to connect to MySQL database")
