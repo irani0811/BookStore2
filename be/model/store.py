@@ -4,7 +4,7 @@ import threading
 from sqlalchemy import create_engine, text
 
 
-DEFAULT_DB_URL = "mysql+pymysql://root:WXRrr20050811@172.25.139.100/bookstore"
+DEFAULT_DB_URL = "mysql+pymysql://root:xxxx@xxxx/bookstore"
 
 
 def resolve_db_url(custom_url=None):
