@@ -5,11 +5,18 @@ import pandas as pd
 from sqlalchemy import create_engine, text
 from tqdm import tqdm
 
+
 SQLITE_DB_PATH = "F:/database/bookstore/fe/data/book.db"
 DEFAULT_MYSQL_URL = "mysql+pymysql://root:xxx@xxxx/bookstore"
 MYSQL_URL = os.getenv("BOOKSTORE_DB_URL", DEFAULT_MYSQL_URL)
 TABLE_NAME = "books"
 PICTURE_FOLDER = "F:/database/bookstore/fe/data/pictures"
+SQLITE_DB_PATH = "F:/fe/data/book.db"
+DEFAULT_MYSQL_URL = "mysql+pymysql://root:xxxx@xxxx/bookstore"
+MYSQL_URL = os.getenv("BOOKSTORE_DB_URL", DEFAULT_MYSQL_URL)
+TABLE_NAME = "books"
+PICTURE_FOLDER = "F:/fe/data/pictures"
+
 
 
 def _str_to_bool(value, default=False):
