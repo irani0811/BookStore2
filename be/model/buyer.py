@@ -1,988 +1,470 @@
-import pymysql
+from pymongo import UpdateOne
 import uuid
 import logging
-from be.model import db_conn
-from be.model import error
-from sqlalchemy.sql import text
-from sqlalchemy.exc import SQLAlchemyError
 import json
-from fe.access.book import Book
-from be.model.times import unpaid_orders
-from datetime import datetime
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
-from collections import defaultdict
 import torch
 import re
-import logging
+from bson import ObjectId, Binary
 
-# 配置日志记录器
-logging.basicConfig(level=logging.INFO)  # 设置最低日志级别为 INFO
-logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO)  # 启用 SQL 语句日志
+from be.model import error
+from be.model import db_conn
+from datetime import datetime
+from be.model import times
+from be.model.times import unpaid_orders
 
-
-class Buyer(db_conn.DBConn):
+class Buyer(db_conn.DBConn): 
     def __init__(self):
         db_conn.DBConn.__init__(self)
-
-
-    # def new_order(self, user_id: str, store_id: str, id_and_count: [(str, int)]) -> (int, str, str):
-    #     order_id = ""
-    #     try:
-    #         with self.conn.connect() as conn:
-    #             # 检查用户是否存在
-    #             # print(f"[DEBUG] Checking if user exists: user_id={user_id}")
-    #             user_check_query = "SELECT 1 FROM users WHERE user_id = :user_id"
-    #             user_result = conn.execute(text(user_check_query), {"user_id": user_id}).fetchone()
-    #             # print(f"[DEBUG] User check result: {user_result}")
-    #             if user_result is None:
-    #                 return error.error_non_exist_user_id(user_id) + (order_id,)
-
-    #             # 检查商店是否存在
-    #             # print(f"[DEBUG] Checking if store exists: store_id={store_id}")
-    #             store_check_query = "SELECT 1 FROM stores WHERE store_id = :store_id"
-    #             store_result = conn.execute(text(store_check_query), {"store_id": store_id}).fetchone()
-    #             # print(f"[DEBUG] Store check result: {store_result}")
-    #             if store_result is None:
-    #                 return error.error_non_exist_store_id(store_id) + (order_id,)
-
-    #             # 生成订单ID
-    #             uid = f"{user_id}_{store_id}_{str(uuid.uuid1())}"
-    #             # print(f"[DEBUG] Generated order_id: {uid}")
-
-    #             for book_id, count in id_and_count:
-    #                 # print(f"[DEBUG] Processing book_id={book_id}, count={count}")
-
-    #                 # 查询书籍信息和库存
-    #                 get_book_query = """
-    #                 SELECT 
-    #                     s.stock_level,
-    #                     b.price
-    #                 FROM stores s
-    #                 JOIN new_books b ON s.book_id = b.book_id
-    #                 WHERE s.store_id = :store_id
-    #                 AND s.book_id = :book_id;
-    #                 """
-    #                 # print(f"[DEBUG] Executing get_book_query for book_id={book_id}")
-    #                 book_result = conn.execute(
-    #                     text(get_book_query),
-    #                     {"store_id": store_id, "book_id": book_id}
-    #                 ).fetchone()
-    #                 # print(f"[DEBUG] get_book_query result for book_id={book_id}: {book_result}")
-
-    #                 if not book_result:
-    #                     return error.error_non_exist_book_id(book_id) + (order_id,)
-
-    #                 # 提取书籍库存和价格
-    #                 stock_level, price = book_result[0], book_result[1]
-    #                 # print(f"[DEBUG] stock_level={stock_level}, price={price} for book_id={book_id}")
-    #                 if stock_level < count:
-    #                     return error.error_stock_level_low(book_id) + (order_id,)
-
-    #                 # 更新库存
-    #                 update_stock_query = """
-    #                 UPDATE stores
-    #                 SET stock_level = stock_level - :count
-    #                 WHERE store_id = :store_id
-    #                 AND book_id = :book_id
-    #                 AND stock_level >= :count;
-    #                 """
-    #                 # print(f"[DEBUG] Executing update_stock_query for book_id={book_id}, count={count}")
-    #                 update_result = conn.execute(text(update_stock_query), {
-    #                     "store_id": store_id,
-    #                     "book_id": book_id,
-    #                     "count": count
-    #                 })
-    #                 # print(f"[DEBUG] update_stock_query result rowcount={update_result.rowcount}")
-    #                 if update_result.rowcount == 0:
-    #                     return error.error_stock_level_low(book_id) + (order_id,)
-
-    #                 # 插入订单详细信息
-    #                 insert_order_detail_query = """
-    #                 INSERT INTO new_order_detail (order_id, book_id, count, price)
-    #                 VALUES (:order_id, :book_id, :count, :price)
-    #                 """
-    #                 # print(f"[DEBUG] Inserting order details for book_id={book_id}")
-    #                 conn.execute(text(insert_order_detail_query), {
-    #                     "order_id": uid,
-    #                     "book_id": book_id,
-    #                     "count": count,
-    #                     "price": price
-    #                 })
-
-    #             # 插入订单
-    #             insert_order_query = """
-    #             INSERT INTO new_order (order_id, store_id, user_id, status, commit_time)
-    #             VALUES (:order_id, :store_id, :user_id, 0, NOW())
-    #             """
-    #             # print(f"[DEBUG] Inserting new order with order_id={uid}")
-    #             conn.execute(text(insert_order_query), {
-    #                 "order_id": uid,
-    #                 "store_id": store_id,
-    #                 "user_id": user_id
-    #             })
-
-    #             conn.commit()
-    #             order_id = uid
-    #             # print(f"[DEBUG] Order committed successfully: order_id={order_id}")
-    #             unpaid_orders.append((order_id, datetime.now()))
-    #             print(f"[DEBUG] Appending order to unpaid_orders: {order_id}")
-    #             print(f"[DEBUG] Current unpaid_orders: {unpaid_orders}")
-                
-    #         print(f"[DEBUG] unpaid_orders before auto_cancel: {unpaid_orders}")
-    #     except Exception as e: 
-    #         conn.rollback()  # 回滚事务
-    #         print(f"[ERROR] An error occurred while creating the order: {str(e)}")
-    #         return 530, str(e), ""
-
-    #     return 200, "ok", order_id
-
+        
     def new_order(self, user_id: str, store_id: str, id_and_count: [(str, int)]) -> (int, str, str):
         order_id = ""
         try:
-            # 1. 检查用户是否存在（事务外）
-            with self.conn.connect() as conn:
-                user_check_query = "SELECT 1 FROM users WHERE user_id = :user_id"
-                user_result = conn.execute(text(user_check_query), {"user_id": user_id}).fetchone()
-                if user_result is None:
-                    return error.error_non_exist_user_id(user_id) + (order_id,)
+            # 检查用户是否存在
+            if not self.user_id_exist(user_id):
+                return error.error_non_exist_user_id(user_id) + (order_id, )
 
-            # 2. 检查商店是否存在（事务外）
-            with self.conn.connect() as conn:
-                store_check_query = "SELECT 1 FROM stores WHERE store_id = :store_id"
-                store_result = conn.execute(text(store_check_query), {"store_id": store_id}).fetchone()
-                if store_result is None:
-                    return error.error_non_exist_store_id(store_id) + (order_id,)
-
-            # 3. 生成订单ID
-            uid = f"{user_id}_{store_id}_{str(uuid.uuid1())}"
-            aggregated_items = defaultdict(int)
+            # 检查商店是否存在
+            if not self.store_id_exist(store_id):
+                return error.error_non_exist_store_id(store_id) + (order_id, )
+            
+            # 生成订单ID
+            uid = "{}_{}_{}".format(user_id, store_id, str(uuid.uuid1()))
+            
             for book_id, count in id_and_count:
-                if count is None or count <= 0:
-                    continue
-                aggregated_items[book_id] += count
-            id_and_count = list(aggregated_items.items())
+                # 检查书籍是否存在及库存信息
+                book = self.conn['stores'].find_one({"store_id": store_id, "books.book_id": book_id}, {"books.$": 1})
+                
+                if book is None:
+                    return error.error_non_exist_book_id(book_id) + (order_id, )
 
-            # 4. 逐步处理每本书
-            for book_id, count in id_and_count:
-                # 查询书籍信息和库存（事务外）
-                with self.conn.connect() as conn:
-                    get_book_query = """
-                    SELECT 
-                        s.stock_level,
-                        b.price
-                    FROM stores s
-                    JOIN new_books b ON s.book_id = b.book_id
-                    WHERE s.store_id = :store_id
-                    AND s.book_id = :book_id
-                    """
-                    book_result = conn.execute(
-                        text(get_book_query),
-                        {"store_id": store_id, "book_id": book_id}
-                    ).fetchone()
+                # 提取书籍信息
+                book_order_info = book['books'][0]
+                stock_level = book_order_info['stock_level']
+                price = book_order_info['price']
 
-                    if not book_result:
-                        return error.error_non_exist_book_id(book_id) + (order_id,)
+                if stock_level < count:
+                    return error.error_stock_level_low(book_id) + (order_id, )
+                
+                # 更新库存，减少对应书籍的数量
+                self.conn['stores'].update_one(
+                    {"store_id": store_id, "books.book_id": book_id, "books.stock_level": {"$gte": count}},
+                    {"$inc": {"books.$.stock_level": -count}}
+                )
+                
+                # 插入订单详细信息到 new_order_detail 集合
+                self.conn['new_order_detail'].insert_one({
+                    "order_id": uid,
+                    "book_id": book_id,
+                    "count": count,
+                    "price": price
+                })
+                
+            # 插入订单到 new_order 集合
+            self.conn['new_order'].insert_one({
+                "order_id": uid,
+                "store_id": store_id,
+                "user_id": user_id,
+                "status": 0, # 待付款
+                "commit_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+            
+            order_id = uid
+            
+            # 使用线程安全的方式添加订单到队列
+            from be.model.times import add_unpaid_order
+            add_unpaid_order(order_id, datetime.now())
+            
+        except Exception as e:
+            logging.error(
+                "Error in new_order for user %s, store %s: %s",
+                user_id,
+                store_id,
+                str(e),
+                exc_info=True,
+            )
+            return 528, "{}".format(str(e)), ""
+        
+        # 成功时，返回订单号
+        return 200, "ok", order_id
+    
+    def payment(self, user_id: str, password: str, order_id: str) -> (int, str): 
+        try: 
+            # 查找订单 
+            order = self.conn['new_order'].find_one({"order_id": order_id, "user_id": user_id}) 
+            if not order: 
+                return error.error_invalid_order_id(order_id) 
 
-                    stock_level, price = book_result[0], book_result[1]
-                    if stock_level < count:
-                        return error.error_stock_level_low(book_id) + (order_id,)
+            # 验证用户密码 
+            user = self.conn['users'].find_one({"user_id": user_id}) 
+            if not user or user['password'] != password: 
+                return error.error_authorization_fail() 
 
-                # 执行更新库存和插入订单详情（事务内）
-                with self.conn.connect() as conn:
-                    trans = conn.begin()  # 开启事务
+            # 使用聚合管道计算订单总金额 
+            price_cursor = self.conn['new_order_detail'].aggregate([ 
+                {"$match": {"order_id": order_id}}, 
+                {"$group": {"_id": None, "total": {"$sum": {"$multiply": ["$price", "$count"]}}}} 
+            ]) 
+
+            price_list = list(price_cursor)
+            if not price_list:
+                return error.error_invalid_order_id(order_id)
+            
+            total_price = price_list[0]['total']
+            
+            # 验证余额是否足够 
+            if user['balance'] < total_price: 
+                return error.error_not_sufficient_funds(order_id)
+            
+            # 扣除买家余额 
+            update_result = self.conn['users'].update_one( 
+                {"user_id": user_id, "balance": {"$gte": total_price}}, 
+                {"$inc": {"balance": -total_price}} 
+            )
+            
+            if update_result.modified_count == 0:
+                return error.error_not_sufficient_funds(order_id)
+
+            # 更新卖家余额 
+            store = self.conn['stores'].find_one({"store_id": order['store_id']}) 
+            if not store: 
+                return error.error_non_exist_store_id(order['store_id']) 
+            
+            seller_id = store['user_id'] 
+            
+            self.conn['users'].update_one( 
+                {"user_id": seller_id}, 
+                {"$inc": {"balance": total_price}} 
+            ) 
+            
+            # 将订单从new_order移动到history_order 
+            order['status'] = 1  # 设置状态为已付款 
+            self.conn['history_order'].insert_one(order) 
+            self.conn['new_order'].delete_one({"order_id": order_id}) 
+            
+            # 更新库存 
+            order_details = list(self.conn['new_order_detail'].find({"order_id": order_id}))
+            for detail in order_details: 
+                # 将订单详情移动到history_order_detail 
+                self.conn['history_order_detail'].insert_one(detail) 
+                
+                # 更新库存 
+                self.conn['stores'].update_one( 
+                    {"store_id": order['store_id'], "books.book_id": detail['book_id']}, 
+                    {"$inc": {"books.$.stock_level": -detail['count']}} 
+                ) 
+                
+            # 删除new_order_detail中的记录 
+            self.conn['new_order_detail'].delete_many({"order_id": order_id})
+                
+        except Exception as e: 
+            import logging
+            import traceback
+            error_msg = f"Error in payment: {str(e)}\n{traceback.format_exc()}"
+            logging.error(error_msg)
+            return 528, "{}".format(str(e))
+        
+        return 200, "ok"
+
+    def add_funds(self, user_id, password, add_value) -> (int, str):
+        try:
+            # 验证用户信息
+            user = self.conn['users'].find_one({"user_id": user_id})  # 改为通过 self.users_collection 获取用户信息
+            if not user:
+                return error.error_non_exist_user_id(user_id)
+
+            if user["password"] != password:
+                return error.error_authorization_fail()
+
+            # 增加余额，并检查是否成功更新
+            self.conn['users'].update_one(
+                {"user_id": user_id},
+                {"$inc": {"balance": add_value}}
+            )
+        except Exception as e:  # 捕获其他潜在的异常
+            return 528, "意外错误: {}".format(str(e))
+
+        return 200, "资金增加成功。"
+    
+    def query_order(self, user_id: str) -> (int, str, list):
+        try:
+            def _sanitize_value(value):
+                if isinstance(value, (ObjectId, Binary)):
+                    return str(value)
+                if isinstance(value, bytes):
                     try:
-                        # 更新库存
-                        update_stock_query = """
-                        UPDATE stores
-                        SET stock_level = stock_level - :count
-                        WHERE store_id = :store_id
-                        AND book_id = :book_id
-                        """
-                        conn.execute(text(update_stock_query), {
-                            "store_id": store_id,
-                            "book_id": book_id,
-                            "count": count
-                        })
+                        return value.decode("utf-8")
+                    except UnicodeDecodeError:
+                        return value.decode("utf-8", errors="ignore")
+                if isinstance(value, datetime):
+                    return value.isoformat()
+                if isinstance(value, list):
+                    return [_sanitize_value(item) for item in value]
+                if isinstance(value, dict):
+                    return {k: _sanitize_value(v) for k, v in value.items()}
+                return value
 
-                        # 插入订单详细信息
-                        insert_order_detail_query = """
-                        INSERT INTO new_order_detail (order_id, book_id, count, price)
-                        VALUES (:order_id, :book_id, :count, :price)
-                        """
-                        conn.execute(text(insert_order_detail_query), {
-                            "order_id": uid,
-                            "book_id": book_id,
-                            "count": count,
-                            "price": price
-                        })
+            # 验证用户是否存在
+            if not self.user_id_exist(user_id):
+                code, msg = error.error_non_exist_user_id(user_id)
+                return code, msg, []
 
-                        trans.commit()  # 提交事务
-                    except Exception as e:
-                        trans.rollback()  # 回滚事务
-                        raise e
+            # 查询历史订单
+            history_orders = list(self.conn['history_order'].find({"user_id": user_id}))
 
-            # 5. 插入订单表（事务内）
-            with self.conn.connect() as conn:
-                trans = conn.begin()  # 开启事务
+            # 查询新订单
+            new_orders = list(self.conn['new_order'].find({"user_id": user_id}))
+
+            # 合并订单列表
+            all_orders = history_orders + new_orders
+
+            # 如果没有订单，返回 529 错误
+            if not all_orders:
+                code, msg, payload = error.error_non_exist_order(user_id)
+                return code, msg, payload
+
+            # 构建订单详情
+            order_list = []
+            for order in all_orders:
                 try:
-                    insert_order_query = """
-                    INSERT INTO new_order (order_id, store_id, user_id, status, commit_time)
-                    VALUES (:order_id, :store_id, :user_id, 0, NOW())
-                    """
-                    conn.execute(text(insert_order_query), {
-                        "order_id": uid,
-                        "store_id": store_id,
-                        "user_id": user_id
-                    })
-                    trans.commit()  # 提交事务
-                    order_id = uid
-                except Exception as e:
-                    trans.rollback()  # 回滚事务
-                    raise e
+                    # 查询订单详情
+                    if order.get('status', 0) == 0:  # 新订单
+                        details = list(self.conn['new_order_detail'].find({"order_id": order['order_id']}))
+                    else:  # 历史订单
+                        details = list(self.conn['history_order_detail'].find({"order_id": order['order_id']}))
 
-            # 6. 更新未支付订单列表（事务外）
-            unpaid_orders.append((order_id, datetime.now()))
-            print(f"[DEBUG] Appending order to unpaid_orders: {order_id}")
-            print(f"[DEBUG] Current unpaid_orders: {unpaid_orders}")
+                    sanitized_details = [_sanitize_value(detail) for detail in details]
+
+                    create_time = order.get('create_time') or order.get('commit_time', "")
+
+                    # 添加订单信息
+                    order_info = {
+                        "order_id": order['order_id'],
+                        "store_id": order.get('store_id', ""),
+                        "status": order.get('status', 0),
+                        "create_time": _sanitize_value(create_time),
+                        "details": sanitized_details
+                    }
+
+                    order_list.append(_sanitize_value(order_info))
+                except Exception as detail_error:
+                    import logging
+                    logging.error(f"Error getting details for order {order['order_id']}: {str(detail_error)}")
+                    # 继续处理下一个订单
+                    continue
 
         except Exception as e:
-            print(f"[ERROR] An error occurred while creating the order: {str(e)}")
-            return 530, str(e), ""
+            import logging
+            import traceback
+            error_msg = f"Error in query_order: {str(e)}\n{traceback.format_exc()}"
+            logging.error(error_msg)
+            return 528, "{}".format(str(e)), {}
 
-        return 200, "ok", order_id
-
-
-
-    def payment(self, user_id: str, password: str, order_id: str) -> (int, str):
-        try:
-            with self.conn.connect() as conn:
-                conn.begin()  # 开启事务
-                print("[DEBUG] Transaction started.")
-
-                # 查询订单
-                query_order = text("SELECT * FROM new_order WHERE order_id = :order_id AND user_id = :user_id")
-                order = conn.execute(query_order, {"order_id": order_id, "user_id": user_id}).mappings().fetchone()
-                if not order:
-                    return error.error_invalid_order_id(order_id)
-
-                # 验证用户密码
-                query_user = text("SELECT * FROM users WHERE user_id = :user_id")
-                user = conn.execute(query_user, {"user_id": user_id}).mappings().fetchone()
-                if not user or user['password'] != password:
-                    return error.error_authorization_fail()
-
-                # 计算订单总金额
-                query_total_price = text("""
-                    SELECT SUM(price * count) as total_price 
-                    FROM new_order_detail 
-                    WHERE order_id = :order_id
-                """)
-                total_price = conn.execute(query_total_price, {"order_id": order_id}).scalar()
-                if total_price is None:
-                    return 528, "Error calculating total price"
-
-                # 验证余额是否充足
-                if user['balance'] < total_price:
-                    return error.error_not_sufficient_funds(order_id)
-
-                # 扣除买家余额
-                update_buyer_balance = text("""
-                    UPDATE users SET balance = balance - :total_price 
-                    WHERE user_id = :user_id AND balance >= :total_price
-                """)
-                conn.execute(update_buyer_balance, {"total_price": total_price, "user_id": user_id})
-
-                # 增加卖家余额
-                query_store = text("SELECT user_id FROM stores WHERE store_id = :store_id")
-                seller_user_id = conn.execute(query_store, {"store_id": order['store_id']}).scalar()
-                if not seller_user_id:
-                    return 528, "Invalid store_id"
-                update_seller_balance = text("""
-                    UPDATE users SET balance = balance + :total_price 
-                    WHERE user_id = :user_id
-                """)
-                conn.execute(update_seller_balance, {"total_price": total_price, "user_id": seller_user_id})
-
-                global unpaid_orders  # 声明为全局变量 
-                unpaid_orders = [order for order in unpaid_orders if order[0] != order_id]
-                print(f"[DEBUG] unpaid_orders after update: {unpaid_orders}")
-
-                # 查询订单详情
-                query_order_details = text("""
-                    SELECT book_id, count, price 
-                    FROM new_order_detail 
-                    WHERE order_id = :order_id
-                """)
-                order_details = conn.execute(query_order_details, {"order_id": order_id}).mappings().fetchall()
-
-                # 将订单详情移至历史订单详情表
-                for detail in order_details:
-                    insert_history_detail = text("""
-                        INSERT INTO history_order_detail (book_id, count, order_id, price, sales)
-                        VALUES (:book_id, :count, :order_id, :price, :sales)
-                    """)
-                    conn.execute(insert_history_detail, {
-                        "book_id": detail['book_id'],  # 使用列名访问
-                        "count": detail['count'],
-                        "order_id": order_id,
-                        "price": detail['price'],
-                        "sales": detail['count'],  # 假设销量等于数量
-                    })
-
-                # 查询订单数据
-                query_order_data = text("""
-                    SELECT order_id, store_id, user_id, commit_time 
-                    FROM new_order 
-                    WHERE order_id = :order_id
-                """)
-                order_data = conn.execute(query_order_data, {"order_id": order_id}).mappings().fetchone()
-
-                # 插入订单至历史订单表
-                insert_history_order = text("""
-                    INSERT INTO history_order (order_id, store_id, user_id, status, commit_time)
-                    VALUES (:order_id, :store_id, :user_id, :status, :commit_time)
-                """)
-                conn.execute(insert_history_order, {
-                    "order_id": order_data['order_id'],
-                    "store_id": order_data['store_id'],
-                    "user_id": order_data['user_id'],
-                    "status": 1,  # 更新状态为已支付
-                    "commit_time": order_data['commit_time'],
-                })
-
-                # 删除新订单及其详情
-                delete_new_order = text("DELETE FROM new_order WHERE order_id = :order_id")
-                conn.execute(delete_new_order, {"order_id": order_id})
-
-                delete_new_order_details = text("DELETE FROM new_order_detail WHERE order_id = :order_id")
-                conn.execute(delete_new_order_details, {"order_id": order_id})
-
-                conn.commit()  # 提交事务
-                print("[DEBUG] Transaction committed.")
-
-        except Exception as e: 
-            conn.rollback()  # 出现异常回滚事务
-            print("[ERROR] Exception occurred:", e)
-            return 528, str(e)
-
-        return 200, "ok"
-
-    
-
-    # def add_funds(self, user_id: str, password: str, add_value: int) -> (int, str):
-    #     try:
-    #         # 使用 SQLAlchemy 的 Engine 获取连接
-    #         with self.conn.connect() as connection:
-    #             # 验证用户密码
-    #             result = connection.execute(
-    #                 text("SELECT password FROM users WHERE user_id = :user_id"),
-    #                 {"user_id": user_id}  # 参数用字典形式
-    #             ).fetchone()
-
-    #             if result is None or result[0] != password:
-    #                 return error.error_authorization_fail()
-
-    #             # 更新余额
-    #             connection.execute(
-    #                 text("UPDATE users SET balance = balance + :add_value WHERE user_id = :user_id"),
-    #                 {"add_value": add_value, "user_id": user_id}  # 参数用字典形式
-    #             )
-    #             connection.commit()
-
-    #     except pymysql.MySQLError as e: 
-    #         logging.error(f"MySQL error: {e}")
-    #         return 528, str(e)
-    #     except Exception as e: 
-    #         logging.error(f"Unexpected error: {e}")
-    #         return 530, str(e)
-
-    #     return 200, "ok"
-    
-    def add_funds(self, user_id: str, password: str, add_value: int) -> (int, str):
-        try:
-            # 1. 验证用户密码（事务外）
-            with self.conn.connect() as connection:
-                result = connection.execute(
-                    text("SELECT password FROM users WHERE user_id = :user_id"),
-                    {"user_id": user_id}
-                ).fetchone()
-
-                if result is None or result[0] != password:
-                    return error.error_authorization_fail()
-
-            # 2. 更新余额（事务内）
-            with self.conn.connect() as connection:
-                trans = connection.begin()  # 显式开启事务
-                try:
-                    connection.execute(
-                        text("UPDATE users SET balance = balance + :add_value WHERE user_id = :user_id"),
-                        {"add_value": add_value, "user_id": user_id}
-                    )
-                    trans.commit()  # 提交事务
-                except Exception as e:
-                    trans.rollback()  # 回滚事务
-                    raise e
-
-        except pymysql.MySQLError as e:  # pragma: no cover
-            logging.error(f"MySQL error: {e}")
-            return 528, str(e)
-        except Exception as e:  # pragma: no cover
-            logging.error(f"Unexpected error: {e}")
-            return 530, str(e)
-
-        return 200, "ok"
-
-    # def query_order(self, user_id: str) -> (int, str, dict):
-    #     """
-    #     查询用户的订单信息，包括新订单和历史订单。
-    #     """
-    #     try:
-    #         with self.conn.connect() as conn:
-    #             # 查询 new_order 表中的订单
-    #             query_new_orders = text("""
-    #             SELECT 
-    #                 order_id, store_id, status, commit_time 
-    #             FROM new_order
-    #             WHERE user_id = :user_id
-    #             """)
-    #             new_orders = conn.execute(query_new_orders, {"user_id": user_id}).mappings().fetchall()
-    #             new_orders_list = [dict(order) for order in new_orders]
-    #             print(f"[DEBUG] New orders for user_id={user_id}: {new_orders_list}")  # 调试信息
-
-    #             # 查询 history_order 表中的订单
-    #             query_history_orders = text("""
-    #             SELECT 
-    #                 order_id, store_id, status, commit_time 
-    #             FROM history_order
-    #             WHERE user_id = :user_id
-    #             """)
-    #             history_orders = conn.execute(query_history_orders, {"user_id": user_id}).mappings().fetchall()
-    #             history_orders_list = [dict(order) for order in history_orders]
-    #             print(f"[DEBUG] History orders for user_id={user_id}: {history_orders_list}")  # 调试信息
-
-    #             # 如果两个表都没有找到订单，返回错误信息
-    #             if not new_orders_list and not history_orders_list:
-    #                 print(f"[DEBUG] No orders found for user_id={user_id}.")
-    #                 return error.error_non_exist_order(user_id)
-
-    #     except SQLAlchemyError as e: 
-    #         logging.error(f"[ERROR] Database error during query_order for user_id={user_id}: {str(e)}")
-    #         return 528, str(e), {}
-    #     except Exception as e: 
-    #         logging.error(f"[ERROR] Unexpected error during query_order for user_id={user_id}: {str(e)}")
-    #         return 530, str(e), {}
-
-    #     # 返回订单信息
-    #     return 200, "ok", {"new_orders": new_orders_list, "history_orders": history_orders_list}
-
-    def query_order(self, user_id: str) -> (int, str, dict):
-        """
-        查询用户的订单信息，包括新订单和历史订单。
-        """
-        try:
-            new_orders_list = []
-            history_orders_list = []
-
-            # 查询 new_order 表中的订单（事务外）
-            with self.conn.connect() as conn:
-                query_new_orders = text("""
-                SELECT 
-                    order_id, store_id, status, commit_time 
-                FROM new_order
-                WHERE user_id = :user_id
-                """)
-                new_orders = conn.execute(query_new_orders, {"user_id": user_id}).mappings().fetchall()
-                new_orders_list = [dict(order) for order in new_orders]
-                print(f"[DEBUG] New orders for user_id={user_id}: {new_orders_list}")  # 调试信息
-
-            # 查询 history_order 表中的订单（事务外）
-            with self.conn.connect() as conn:
-                query_history_orders = text("""
-                SELECT 
-                    order_id, store_id, status, commit_time 
-                FROM history_order
-                WHERE user_id = :user_id
-                """)
-                history_orders = conn.execute(query_history_orders, {"user_id": user_id}).mappings().fetchall()
-                history_orders_list = [dict(order) for order in history_orders]
-                print(f"[DEBUG] History orders for user_id={user_id}: {history_orders_list}")  # 调试信息
-
-            # 如果两个表都没有找到订单，返回错误信息
-            if not new_orders_list and not history_orders_list:
-                print(f"[DEBUG] No orders found for user_id={user_id}.")
-                return error.error_non_exist_order(user_id)
-
-        except SQLAlchemyError as e:  # pragma: no cover
-            logging.error(f"[ERROR] Database error during query_order for user_id={user_id}: {str(e)}")
-            return 528, str(e), {}
-        except Exception as e:  # pragma: no cover
-            logging.error(f"[ERROR] Unexpected error during query_order for user_id={user_id}: {str(e)}")
-            return 530, str(e), {}
-
-        # 返回订单信息
-        return 200, "ok", {"new_orders": new_orders_list, "history_orders": history_orders_list}
-
-
-    # def receive_order(self, user_id: str, order_id: str) -> (int, str):
-    #     try:
-    #         with self.conn.connect() as conn:
-    #             # 查询订单
-    #             query_order = text("""
-    #                 SELECT status 
-    #                 FROM history_order 
-    #                 WHERE order_id = :order_id AND user_id = :user_id
-    #             """)
-    #             order = conn.execute(query_order, {"order_id": order_id, "user_id": user_id}).mappings().fetchone()
-
-    #             # 检查订单是否存在
-    #             if not order:
-    #                 return error.error_invalid_order_id(order_id)
-
-    #             # 检查订单状态是否为 "待收货" (状态 2)
-    #             order_status = order['status']  # 使用字典键访问
-    #             if order_status != 2:
-    #                 return error.error_not_delivery(order_id)
-
-    #             # 更新订单状态为 "交易成功" (状态 4)
-    #             update_order = text("""
-    #                 UPDATE history_order
-    #                 SET status = :new_status
-    #                 WHERE order_id = :order_id AND user_id = :user_id
-    #             """)
-    #             conn.execute(update_order, {"new_status": 4, "order_id": order_id, "user_id": user_id})
-    #             conn.commit()
-
-    #     except Exception as e: 
-    #         logging.error(f"收货过程中出现错误: {str(e)}")
-    #         return 528, f"收货失败: {str(e)}"
-
-    #     return 200, "收货成功"
+        return 200, "ok", order_list
     
     def receive_order(self, user_id: str, order_id: str) -> (int, str):
         try:
-            # 查询订单信息（事务外）
-            with self.conn.connect() as conn:
-                query_order = text("""
-                    SELECT status 
-                    FROM history_order 
-                    WHERE order_id = :order_id AND user_id = :user_id
-                """)
-                order = conn.execute(query_order, {"order_id": order_id, "user_id": user_id}).mappings().fetchone()
+            # 查找订单
+            order = self.conn['history_order'].find_one({"order_id": order_id, "user_id": user_id})
+            if not order:
+                return error.error_invalid_order_id(order_id)
 
-                # 检查订单是否存在
-                if not order:
-                    return error.error_invalid_order_id(order_id)
+            # 检查订单状态是否为待收货 (状态 2)
+            if order.get('status') != 2:
+                return error.error_not_delivery(order_id)
 
-                # 检查订单状态是否为 "待收货" (状态 2)
-                order_status = order['status']
-                if order_status != 2:
-                    return error.error_not_delivery(order_id)
-
-            # 更新订单状态（事务内）
-            with self.conn.connect() as conn:
-                trans = conn.begin()
-                try:
-                    update_order = text("""
-                        UPDATE history_order
-                        SET status = :new_status
-                        WHERE order_id = :order_id AND user_id = :user_id
-                    """)
-                    conn.execute(update_order, {
-                        "new_status": 4,  # 交易成功状态
-                        "order_id": order_id,
-                        "user_id": user_id
-                    })
-                    trans.commit()
-                except Exception as e:
-                    trans.rollback()
-                    logging.error(f"[ERROR] 更新订单状态失败: {str(e)}")
-                    return 528, f"更新订单状态失败: {str(e)}"
-
+            # 更新订单状态为已完成 (状态 3)
+            self.conn['history_order'].update_one(
+                {"order_id": order_id},
+                {"$set": {"status": 3}}  # 状态 3 表示已完成
+            )
+                
         except Exception as e:
-            logging.error(f"收货过程中出现错误: {str(e)}")
+            import logging
+            import traceback
+            error_msg = f"Error in receive_order: {str(e)}\n{traceback.format_exc()}"
+            logging.error(error_msg)
             return 528, f"收货失败: {str(e)}"
-
-        return 200, "收货成功"
-
-    
-    # def cancel_order(self, user_id: str, order_id: str) -> (int, str):
-    #     try:
-    #         with self.conn.connect() as conn:
-    #             # 查找订单
-    #             query_order = text("""
-    #                 SELECT order_id, status, store_id
-    #                 FROM new_order
-    #                 WHERE order_id = :order_id AND user_id = :user_id
-    #             """)
-    #             order = conn.execute(query_order, {"order_id": order_id, "user_id": user_id}).mappings().fetchone()
-
-    #             # 检查订单是否存在
-    #             if not order:
-    #                 return error.error_invalid_order_id(order_id)
-
-    #             # 检查订单是否为待付款状态 (状态 0)
-    #             if order['status'] != 0:
-    #                 return error.error_order_not_cancelable(order_id)
-
-    #             # 获取订单详情
-    #             query_order_details = text("""
-    #                 SELECT book_id, count
-    #                 FROM new_order_detail
-    #                 WHERE order_id = :order_id
-    #             """)
-    #             order_details = conn.execute(query_order_details, {"order_id": order_id}).mappings().fetchall()
-
-    #             # 恢复库存
-    #             for detail in order_details:
-    #                 update_stock = text("""
-    #                     UPDATE stores
-    #                     SET stock_level = stock_level + :count
-    #                     WHERE store_id = :store_id AND book_id = :book_id
-    #                 """)
-    #                 conn.execute(update_stock, {
-    #                     "count": detail['count'],
-    #                     "store_id": order['store_id'],
-    #                     "book_id": detail['book_id']
-    #                 })
-
-    #             # 将订单详情插入到历史订单详情表
-    #             insert_history_details = text("""
-    #                 INSERT INTO history_order_detail (book_id, count, order_id, price, sales)
-    #                 SELECT book_id, count, order_id, price, 0
-    #                 FROM new_order_detail
-    #                 WHERE order_id = :order_id
-    #             """)
-    #             conn.execute(insert_history_details, {"order_id": order_id})
-
-    #             # 将订单插入到历史订单表，并设置状态为 3 (已取消)
-    #             insert_history_order = text("""
-    #                 INSERT INTO history_order (order_id, store_id, status, user_id, commit_time)
-    #                 SELECT order_id, store_id, 3 AS status, user_id, commit_time
-    #                 FROM new_order
-    #                 WHERE order_id = :order_id
-    #             """)
-    #             conn.execute(insert_history_order, {"order_id": order_id})
-    #             print(f"[DEBUG] Successfully moved order {order_id} to history_order")
-
-    #             # 删除新订单及其详情
-    #             delete_new_order = text("DELETE FROM new_order WHERE order_id = :order_id")
-    #             conn.execute(delete_new_order, {"order_id": order_id})
-
-    #             delete_new_order_details = text("DELETE FROM new_order_detail WHERE order_id = :order_id")
-    #             conn.execute(delete_new_order_details, {"order_id": order_id})
-    #             print(f"[DEBUG] Deleted order {order_id} from new_order and new_order_detail")
-
-    #             # 提交事务
-    #             conn.commit()
-
-    #     except Exception as e: 
-    #         conn.rollback()  # 回滚事务以防止部分操作成功
-    #         return 528, f"取消订单时发生错误: {str(e)}"
-
-    #     return 200, "ok"
-
-    def cancel_order(self, user_id: str, order_id: str) -> (int, str):
-        try:
-            # 1. 查找订单信息（事务外）
-            with self.conn.connect() as conn:
-                query_order = text("""
-                    SELECT order_id, status, store_id
-                    FROM new_order
-                    WHERE order_id = :order_id AND user_id = :user_id
-                """)
-                order = conn.execute(query_order, {"order_id": order_id, "user_id": user_id}).mappings().fetchone()
-
-                # 检查订单是否存在
-                if not order:
-                    return error.error_invalid_order_id(order_id)
-
-                # 检查订单是否为待付款状态 (状态 0)
-                if order['status'] != 0:
-                    return error.error_order_not_cancelable(order_id)
-
-                # 获取订单详情
-                query_order_details = text("""
-                    SELECT book_id, count
-                    FROM new_order_detail
-                    WHERE order_id = :order_id
-                """)
-                order_details = conn.execute(query_order_details, {"order_id": order_id}).mappings().fetchall()
-
-            # 2. 执行恢复库存和插入历史订单等操作（事务内）
-            with self.conn.connect() as conn:
-                trans = conn.begin()
-                try:
-                    # 恢复库存
-                    for detail in order_details:
-                        update_stock = text("""
-                            UPDATE stores
-                            SET stock_level = stock_level + :count
-                            WHERE store_id = :store_id AND book_id = :book_id
-                        """)
-                        conn.execute(update_stock, {
-                            "count": detail['count'],
-                            "store_id": order['store_id'],
-                            "book_id": detail['book_id']
-                        })
-
-                    # 将订单详情插入到历史订单详情表
-                    insert_history_details = text("""
-                        INSERT INTO history_order_detail (book_id, count, order_id, price, sales)
-                        SELECT book_id, count, order_id, price, 0
-                        FROM new_order_detail
-                        WHERE order_id = :order_id
-                    """)
-                    conn.execute(insert_history_details, {"order_id": order_id})
-
-                    # 将订单插入到历史订单表，并设置状态为 3 (已取消)
-                    insert_history_order = text("""
-                        INSERT INTO history_order (order_id, store_id, status, user_id, commit_time)
-                        SELECT order_id, store_id, 3 AS status, user_id, commit_time
-                        FROM new_order
-                        WHERE order_id = :order_id
-                    """)
-                    conn.execute(insert_history_order, {"order_id": order_id})
-
-                    # 删除新订单及其详情
-                    delete_new_order = text("DELETE FROM new_order WHERE order_id = :order_id")
-                    conn.execute(delete_new_order, {"order_id": order_id})
-
-                    delete_new_order_details = text("DELETE FROM new_order_detail WHERE order_id = :order_id")
-                    conn.execute(delete_new_order_details, {"order_id": order_id})
-
-                    trans.commit()
-                except Exception as e:
-                    trans.rollback()
-                    logging.error(f"[ERROR] 取消订单时发生错误: {str(e)}")
-                    return 528, f"取消订单时发生错误: {str(e)}"
-
-        except Exception as e:
-            logging.error(f"[ERROR] 取消订单过程中出现错误: {str(e)}")
-            return 528, f"取消订单时发生错误: {str(e)}"
 
         return 200, "ok"
 
-
-    
-    # def auto_cancel(self, order_id: str) -> (int, str):
-    #     try:
-    #         with self.conn.connect() as conn:
-    #             print(f"[DEBUG] unpaid_orders before auto_cancel: {unpaid_orders}")
-    #             # 检查历史订单状态
-    #             query_history_order = text("""
-    #             SELECT status FROM history_order WHERE order_id = :order_id
-    #             """)
-    #             print(f"[DEBUG] Querying history_order table for order_id={order_id}")
-    #             result = conn.execute(query_history_order, {"order_id": order_id}).fetchone()
-    #             print(f"[DEBUG] Query result: {result}")
-    #             print(f"[DEBUG] Using order_id: {order_id}")
-    #             if result:
-    #                 history_status = result[0]
-    #                 print(f"[DEBUG] History order status: {history_status}")
-    #                 if history_status == 3:  # 状态为3，表示已取消成功
-    #                     return 200, "ok"
-
-    #             # 如果历史订单中没有找到，再检查新订单状态
-    #             query_new_order = text("""
-    #             SELECT status FROM new_order WHERE order_id = :order_id
-    #             """)
-    #             result = conn.execute(query_new_order, {"order_id": order_id}).fetchone()
-    #             print(f"[DEBUG] New order query result: {result}")
-    #             if result:
-    #                 new_status = result[0]
-    #                 print(f"[DEBUG] New order status: {new_status}")
-    #                 if new_status == 0:  # 状态为0，表示未付款取消失败
-    #                     return 600, error.error_not_cancel_order(order_id)
-
-    #             # 如果在两个表中都找不到订单
-    #             print("[DEBUG] Order not found in both history_order and new_order tables.")
-    #             return 518, error.error_missing_order(order_id)
-
-    #     except Exception as e: 
-    #         print(f"[ERROR] auto_cancel exception: {str(e)}")
-    #         return 528, f"Unexpected error: {str(e)}"
-    def auto_cancel(self, order_id: str) -> (int, str):
+    def cancel_order(self, user_id: str, order_id: str) -> (int, str):
         try:
-            # 检查历史订单状态（事务外）
-            with self.conn.connect() as conn:
-                query_history_order = text("""
-                    SELECT status FROM history_order WHERE order_id = :order_id
-                """)
-                print(f"[DEBUG] Querying history_order table for order_id={order_id}")
-                history_result = conn.execute(query_history_order, {"order_id": order_id}).fetchone()
-                print(f"[DEBUG] History order query result: {history_result}")
+            # 查找订单
+            order = self.conn['new_order'].find_one({"order_id": order_id, "user_id": user_id})
+            if not order:
+                return error.error_invalid_order_id(order_id)
 
-                if history_result:
-                    history_status = history_result[0]
-                    print(f"[DEBUG] History order status: {history_status}")
-                    if history_status == 3:  # 状态为3，表示已取消成功
-                        return 200, "ok"
+            # 检查订单状态是否为未付款 (状态 0)
+            if order['status'] != 0:
+                return error.error_invalid_order_status(order_id)
 
-            # 检查新订单状态（事务外）
-            with self.conn.connect() as conn:
-                query_new_order = text("""
-                    SELECT status FROM new_order WHERE order_id = :order_id
-                """)
-                print(f"[DEBUG] Querying new_order table for order_id={order_id}")
-                new_order_result = conn.execute(query_new_order, {"order_id": order_id}).fetchone()
-                print(f"[DEBUG] New order query result: {new_order_result}")
+            try:
+                # 将订单从new_order移动到history_order
+                order['status'] = 4  # 设置状态为已取消
+                self.conn['history_order'].insert_one(order)
+                self.conn['new_order'].delete_one({"order_id": order_id})
+                
+                # 将订单详情从new_order_detail移动到history_order_detail
+                order_details = list(self.conn['new_order_detail'].find({"order_id": order_id}))
+                for detail in order_details:
+                    self.conn['history_order_detail'].insert_one(detail)
+                    
+                # 删除new_order_detail中的记录
+                self.conn['new_order_detail'].delete_many({"order_id": order_id})
+                
+                # 从未付款队列中移除订单
+                from be.model.times import order_lock
+                with order_lock:
+                    global unpaid_orders
+                    unpaid_orders = [order for order in unpaid_orders if order[0] != order_id]
+                    
+            except Exception as db_error:
+                import logging
+                logging.error(f"Database error in cancel_order: {str(db_error)}")
+                return 522, "Failed to cancel order"
+                
+        except Exception as e:
+            import logging
+            import traceback
+            error_msg = f"Error in cancel_order: {str(e)}\n{traceback.format_exc()}"
+            logging.error(error_msg)
+            
+            # 根据错误类型返回适当的错误码
+            if "order_id" in str(e).lower():
+                return error.error_invalid_order_id(order_id)
+            elif "status" in str(e).lower():
+                return error.error_invalid_order_status(order_id)
+            else:
+                return 522, f"Cancel order failed: {str(e)}"
 
-                if new_order_result:
-                    new_status = new_order_result[0]
-                    print(f"[DEBUG] New order status: {new_status}")
-                    if new_status == 0:  # 状态为0，表示未付款取消失败
-                        return 600, error.error_not_cancel_order(order_id)
+        return 200, "ok"
+    
+    def auto_cancel(self, order_id: str):
+        try:
+            # 先检查历史订单集合中的状态
+            history_order = self.conn['history_order'].find_one({"order_id": order_id})
+            
+            if history_order and history_order["status"] == 3:
+                # 如果在 history_order 中找到且状态为3，表示已取消成功
+                return 200, 'ok'
 
-            # 如果在两个表中都找不到订单
-            print(f"[DEBUG] Order with order_id={order_id} not found in both history_order and new_order tables.")
-            return 518, error.error_missing_order(order_id)
+            # 如果在历史订单中没有找到，再检查新订单集合
+            new_order = self.conn['new_order'].find_one({"order_id": order_id})
+            if new_order:
+                if new_order["status"] == 0:
+                    # 使用check_specific_order检查订单是否超时并取消
+                    from be.model.times import check_specific_order
+                    if check_specific_order(order_id):
+                        return 200, 'ok'
+                    else:
+                        return error.error_not_cancel_order(order_id)
+                else:
+                    # 订单状态不是0，不能取消
+                    return error.error_not_cancel_order(order_id)
+
+            # 如果在两个集合中都找不到订单
+            return error.error_missing_order(order_id)
 
         except Exception as e:
-            print(f"[ERROR] Exception in auto_cancel: {str(e)}")
-            return 528, f"Unexpected error: {str(e)}"       
-
+            import traceback
+            error_msg = f"Error in auto_cancel: {str(e)}\n{traceback.format_exc()}"
+            logging.error(error_msg)
+            return 528, "{}".format(str(e))
+         
     def recommend_books_one(self, user_id: str, count: int) -> (int, str, list):
         try:
-            with self.conn.connect() as conn:
-                # 检查用户是否存在
-                user_check_query = "SELECT 1 FROM users WHERE user_id = :user_id"
-                user_exists = conn.execute(text(user_check_query), {"user_id": user_id}).fetchone()
-                print(f"[DEBUG] 检查用户是否存在: user_id={user_id}, user_exists={user_exists}")
-                if not user_exists:
-                    print(f"[ERROR] 用户 {user_id} 不存在。")
-                    return 404, "User does not exist", []
+            def _sanitize_books(raw_books):
+                sanitized_list = []
+                for book in raw_books:
+                    if not isinstance(book, dict):
+                        continue
+                    sanitized = {}
+                    for key, value in book.items():
+                        if isinstance(value, (ObjectId, Binary)):
+                            sanitized[key] = str(value)
+                        elif isinstance(value, bytes):
+                            try:
+                                sanitized[key] = value.decode("utf-8")
+                            except UnicodeDecodeError:
+                                sanitized[key] = value.decode("utf-8", errors="ignore")
+                        elif isinstance(value, datetime):
+                            sanitized[key] = value.isoformat()
+                        else:
+                            sanitized[key] = value
+                    sanitized_list.append(sanitized)
+                return sanitized_list
 
-                # 第一步：找到当前用户的订单
-                user_orders_query = "SELECT order_id FROM history_order WHERE user_id = :user_id"
-                user_orders = conn.execute(text(user_orders_query), {"user_id": user_id}).fetchall()
-                print(f"[DEBUG] 用户 {user_id} 的订单：{user_orders}")
-                user_order_ids = [record[0] for record in user_orders]  # 确保使用元组索引提取数据
-                print(f"[DEBUG] 提取的订单ID：{user_order_ids}")
+            # 检查用户是否存在
+            user_exists = self.conn['users'].find_one({"user_id": user_id})
+            if not user_exists:
+                return 404, "User does not exist", []
 
-                # 检查用户是否有订单
-                if not user_order_ids:
-                    print(f"[ERROR] 用户 {user_id} 没有订单。")
-                    return 528, "User has no orders", []
+            # 第一步：找到当前用户的订单
+            user_orders = list(self.conn['history_order'].find({"user_id": user_id}))
+            
+            # 如果用户没有订单，返回无购买记录
+            if not user_orders:
+                return 528, "no purchase history", []
+                
+            # 第二步：找到用户购买过的书籍
+            purchased_books = []
+            for order in user_orders:
+                order_details = list(self.conn['history_order_detail'].find({"order_id": order['order_id']}))
+                for detail in order_details:
+                    if 'book_id' in detail:
+                        purchased_books.append(detail['book_id'])
+                    
+            # 如果没有购买记录详情，同样返回无购买记录
+            if not purchased_books:
+                return 528, "no purchase history", []
 
-                # 第二步：通过订单ID找到用户已购买的书籍
-                purchased_books_query = """
-                    SELECT DISTINCT book_id 
-                    FROM history_order_detail 
-                    WHERE order_id IN :order_ids
-                """
-                print(f"[DEBUG] 执行查询以获取已购买书籍：{purchased_books_query}")
-                purchased_books = conn.execute(
-                    text(purchased_books_query),
-                    {"order_ids": tuple(user_order_ids)}
-                ).fetchall()
-                print(f"[DEBUG] 查询结果：{purchased_books}")
-                user_purchased_books = {record[0] for record in purchased_books}
-                print(f"[DEBUG] 用户 {user_id} 已购买的书籍：{user_purchased_books}")
+            # 第三步：根据购买过的书籍推荐相似的书籍
+            sample_book = self.conn['books'].find_one({"id": purchased_books[0]})
+            if sample_book and 'tags' in sample_book:
+                raw_tags = sample_book.get('tags')
+                if isinstance(raw_tags, str):
+                    tags = [tag.strip() for tag in raw_tags.split(',') if tag.strip()]
+                elif isinstance(raw_tags, (list, tuple, set)):
+                    tags = [tag for tag in raw_tags if isinstance(tag, str) and tag.strip()]
+                else:
+                    tags = []
 
-                # 检查是否找到已购买的书籍
-                if not user_purchased_books:
-                    print(f"[ERROR] 用户 {user_id} 没有已购买的书籍。")
-                    return 528, "User has not purchased any books", []
+                if tags:
+                    # 查找具有相同标签的书籍
+                    recommended_books = list(self.conn['books'].find(
+                        {"tags": {"$in": tags}, "id": {"$nin": purchased_books}}
+                    ).limit(count))
 
-                # 第三步：查找其他用户购买相同书籍的订单和用户
-                similar_users_query = """
-                    SELECT DISTINCT h.user_id, hod.order_id, hod.book_id
-                    FROM history_order_detail hod
-                    JOIN history_order h ON hod.order_id = h.order_id
-                    WHERE hod.book_id IN :book_ids
-                    AND h.user_id != :user_id
-                """
-                print(f"[DEBUG] 执行查询以查找购买相同书籍的用户：{similar_users_query}")
-                similar_users = conn.execute(
-                    text(similar_users_query),
-                    {"book_ids": tuple(user_purchased_books), "user_id": user_id}
-                ).fetchall()
-                print(f"[DEBUG] 查询结果（购买相同书籍的用户）：{similar_users}")
+                    # 如果推荐数量不足，补充随机书籍
+                    if len(recommended_books) < count:
+                        additional_count = count - len(recommended_books)
+                        additional_books = list(self.conn['books'].aggregate([
+                            {"$match": {"id": {"$nin": purchased_books + [book.get('id', '') for book in recommended_books]}}},
+                            {"$sample": {"size": additional_count}}
+                        ]))
+                        recommended_books.extend(additional_books)
 
-                # 提取订单ID和用户ID
-                order_ids = set()
-                user_ids = set()
-                for record in similar_users:
-                    order_ids.add(record[1])  # 假设 order_id 在元组中是第二个元素
-                    user_ids.add(record[0])   # 假设 user_id 在元组中是第一个元素
-                print(f"[DEBUG] 提取的订单ID：{order_ids}")
-                print(f"[DEBUG] 提取的用户ID：{user_ids}")
+                    return 200, "ok", _sanitize_books(recommended_books)
 
-                # 检查是否找到其他用户
-                if not user_ids:
-                    print("[ERROR] 未找到购买相同书籍的其他用户。")
-                    return 528, "No similar users found", []
-
-                # 第四步：查找这些用户购买的其他书籍，排除当前用户已购买的书籍
-                other_books_query = """
-                    SELECT hod.book_id, COUNT(*) as frequency
-                    FROM history_order_detail hod
-                    JOIN history_order h ON hod.order_id = h.order_id
-                    WHERE hod.order_id IN :order_ids
-                    AND hod.book_id NOT IN :user_books
-                    AND h.user_id IN :user_ids
-                    GROUP BY hod.book_id
-                    ORDER BY frequency DESC
-                    LIMIT :count
-                """
-                print(f"[DEBUG] 执行查询以获取推荐书籍：{other_books_query}")
-                print(f"[DEBUG] 查询参数：order_ids={tuple(order_ids)}, user_books={tuple(user_purchased_books)}, user_ids={tuple(user_ids)}, count={count}")
-                other_books = conn.execute(
-                    text(other_books_query),
-                    {
-                        "order_ids": tuple(order_ids),
-                        "user_books": tuple(user_purchased_books),
-                        "user_ids": tuple(user_ids),
-                        "count": count,
-                    },
-                ).mappings().fetchall()
-                print(f"[DEBUG] 查询结果：{list(other_books)}")
-
-                if not other_books:
-                    print("[ERROR] 未找到推荐书籍。")
-                    return 200, "No recommended books found", []
-
-                # 获取书籍详细信息
-                book_ids = [record["book_id"] for record in other_books]
-                print(f"[DEBUG] 提取的书籍ID：{book_ids}")
-                book_query = """
-                    SELECT book_id, title, author, publisher, price
-                    FROM new_books
-                    WHERE book_id IN :book_ids
-                """
-                print(f"[DEBUG] 执行查询以获取书籍详细信息：{book_query}")
-                books = conn.execute(
-                    text(book_query),
-                    {"book_ids": tuple(book_ids)}
-                ).mappings().fetchall()
-                print(f"[DEBUG] 书籍查询结果：{list(books)}")
-
-                recommend_books = []
-                for book in books:
-                    recommend_books.append({
-                        "book_id": book["book_id"],
-                        "title": book.get("title", "Unknown title"),
-                        "author": book.get("author", "Unknown author"),
-                        "publisher": book.get("publisher", "Unknown publisher"),
-                        "price": book.get("price", "Unknown price"),
-                    })
-
-                print(f"[DEBUG] 最终推荐书籍：{recommend_books}")
-                return 200, "ok", recommend_books
-
-        except Exception as e: 
-            print(f"[ERROR] 推荐过程出现错误：{str(e)}")
-            return 528, f"Error in recommendation: {str(e)}", []
+            # 如果无法基于标签推荐，返回随机推荐
+            random_books = list(self.conn['books'].aggregate([
+                {"$match": {"id": {"$nin": purchased_books}}},
+                {"$sample": {"size": count}}
+            ]))
+            return 200, "ok", _sanitize_books(random_books)
+                
+        except Exception as e:
+            import logging
+            import traceback
+            error_msg = f"Error in recommend_books_one: {str(e)}\n{traceback.format_exc()}"
+            logging.error(error_msg)
+            return 528, "{}".format(str(e)), []
         
     def generate_and_extract_titles(self, txt, model_id='charent/ChatLM-mini-Chinese'):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
         try:
-            # 检查输入是否为空
-            if not txt.strip():
-                return 540, "输入文本不能为空", []
-
-            # 设置设备
-            device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
             # 加载分词器和模型
             tokenizer = AutoTokenizer.from_pretrained(model_id)
             model = AutoModelForSeq2SeqLM.from_pretrained(model_id, trust_remote_code=True).to(device)
@@ -1004,27 +486,15 @@ class Buyer(db_conn.DBConn):
             outs_txt = tokenizer.batch_decode(outs.cpu().numpy(), skip_special_tokens=True, clean_up_tokenization_spaces=True)
             output_text = outs_txt[0]
 
-            # 使用正则表达式从生成的输出文本中提取书名
+            # 使用正则表达式从输出文本中提取书名
             pattern = r'《(.*?)》'
             titles = re.findall(pattern, output_text)
             unique_titles = list(set(titles))  # 去除重复的书名
 
-            # 插入数据库
-            with self.conn.connect() as conn:
-                insert_query = text("""
-                    INSERT INTO generated_titles (input_text, generated_text, titles, created_at)
-                    VALUES (:input_text, :generated_text, :titles, NOW())
-                """)
-                conn.execute(insert_query, {
-                    "input_text": txt,
-                    "generated_text": output_text,
-                    "titles": json.dumps(unique_titles, ensure_ascii=False),
-                })
-                conn.commit()
-
-            # 返回状态码和提取的书名
+            # 返回成功状态码和提取的书名
             return 200, unique_titles
 
         except Exception as e:
-            logging.error(f"生成和提取书名时出错: {str(e)}")
+            # 如果发生异常，记录错误并返回状态码和错误信息
+            logging.error("生成和提取书名时出错: {}".format(str(e)))
             return 528, []

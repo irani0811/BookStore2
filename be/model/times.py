@@ -1,112 +1,113 @@
 from collections import deque
 from datetime import datetime, timedelta
-from sqlalchemy import create_engine, text
-from be.model.store import resolve_db_url
-import os
+from pymongo import MongoClient
+import threading
+from queue import Queue
+
 # 定义全局变量
-unpaid_orders = deque()
+unpaid_orders = deque()  # 使用队列存储未付款订单，按添加顺序排列
+time_limit = 0.166667  # 将订单存活时间改为10秒（以分钟为单位表示）
+# 添加线程锁来保护对unpaid_orders的访问
+order_lock = threading.RLock()
 
-def _resolve_time_limit_minutes() -> float:
-    seconds_env = os.getenv("ORDER_TIME_LIMIT_SECONDS")
-    if seconds_env is not None:
-        try:
-            return float(seconds_env) / 60.0
-        except ValueError:
-            print(f"[WARN] Invalid ORDER_TIME_LIMIT_SECONDS={seconds_env}, fallback to minutes/default")
-
-    minutes_env = os.getenv("ORDER_TIME_LIMIT_MINUTES")
-    if minutes_env is not None:
-        try:
-            return float(minutes_env)
-        except ValueError:
-            print(f"[WARN] Invalid ORDER_TIME_LIMIT_MINUTES={minutes_env}, fallback to default")
-
-    return 10.0 / 60.0  # 默认 10 秒
-
-TIME_LIMIT_MINUTES = _resolve_time_limit_minutes()
-time_limit = TIME_LIMIT_MINUTES
 # 初始化数据库连接
-engine = create_engine(resolve_db_url(), echo=True)
+client = MongoClient("mongodb://localhost:27017")
+db = client['bookstore']
 
 def get_time_stamp():
     return datetime.now()
 
 def check_order_time(order_time):
     cur_time = get_time_stamp()
-    is_valid = (cur_time - order_time) < timedelta(minutes=time_limit)
-    print(f"[DEBUG] Checking order time: current_time={cur_time}, order_time={order_time}, is_valid={is_valid}")
-    return is_valid
+    return (cur_time - order_time) < timedelta(minutes=time_limit)
 
 def cancel_expired_order(order_id):
     try:
-        with engine.connect() as conn:
-            print(f"[DEBUG] Attempting to cancel order: order_id={order_id}")
-
-            # 查询订单
-            query_order = text("SELECT * FROM new_order WHERE order_id = :order_id")
-            order = conn.execute(query_order, {"order_id": order_id}).mappings().fetchone()
-            print(f"[DEBUG] Queried order: {order}")
-            if not order:
-                print(f"[DEBUG] Order {order_id} not found in new_order table.")
-                return
-
-            # 查询订单详情
-            query_order_details = text("SELECT * FROM new_order_detail WHERE order_id = :order_id")
-            order_details = conn.execute(query_order_details, {"order_id": order_id}).mappings().fetchall()
-            print(f"[DEBUG] Queried order details: {order_details}")
-
-            # 将订单状态设置为 3 并插入到历史订单表
-            move_order_to_history = text("""
-                INSERT INTO history_order (order_id, store_id, status, user_id, commit_time)
-                VALUES (:order_id, :store_id, 3, :user_id, :commit_time)
-            """)
-            conn.execute(move_order_to_history, {
-                "order_id": order["order_id"],
-                "store_id": order["store_id"],
-                "user_id": order["user_id"],
-                "commit_time": order["commit_time"]
-            })
-            print(f"[DEBUG] Moved order {order_id} to history_order table.")
-
-            # 将订单详情插入到历史订单详情表
-            move_order_details_to_history = text("""
-                INSERT INTO history_order_detail (_id, book_id, count, order_id, price, sales)
-                SELECT _id, book_id, count, order_id, price, 0
-                FROM new_order_detail
-                WHERE order_id = :order_id
-            """)
-            conn.execute(move_order_details_to_history, {"order_id": order_id})
-            print(f"[DEBUG] Moved order details for {order_id} to history_order_detail table.")
-
-            # 删除新订单表中的订单
-            delete_order = text("DELETE FROM new_order WHERE order_id = :order_id")
-            conn.execute(delete_order, {"order_id": order_id})
-            print(f"[DEBUG] Deleted order {order_id} from new_order table.")
-
-            # 删除新订单详情表中的订单详情
-            delete_order_details = text("DELETE FROM new_order_detail WHERE order_id = :order_id")
-            conn.execute(delete_order_details, {"order_id": order_id})
-            print(f"[DEBUG] Deleted order details for {order_id} from new_order_detail table.")
-
-            # 从未付款订单队列中移除
-            global unpaid_orders
-            print(f"[DEBUG] Before removing: unpaid_orders={list(unpaid_orders)}")
-            unpaid_orders = [order for order in unpaid_orders if order[0] != order_id]
-            print(f"[DEBUG] After removing: unpaid_orders={list(unpaid_orders)}")
+        # 使用事务操作来确保原子性
+        order = db['new_order'].find_one({"order_id": order_id})
+        
+        if order is None:
+            print(f"Warning: Order {order_id} not found in database")
+            return
+        
+        order_details = list(db['new_order_detail'].find({"order_id": order_id}))
+        
+        order['status'] = 3  # 设置订单状态为3，表示订单已取消
+        db['history_order'].insert_one(order)
+        
+        for detail in order_details:
+            db['history_order_detail'].insert_one(detail)
             
-            conn.commit()
-            print(f"[DEBUG] Order {order_id} cancelled and moved to history.")
+        db['new_order'].delete_one({"order_id": order_id})
+        db['new_order_detail'].delete_many({"order_id": order_id})
+        
+        # 使用线程锁保护对队列的操作
+        with order_lock:
+            global unpaid_orders
+            unpaid_orders = [order for order in unpaid_orders if order[0] != order_id]
     except Exception as e:
-        print(f"[ERROR] Error cancelling expired order {order_id}: {str(e)}")
-        conn.rollback()
+        print(f"Error in cancel_expired_order: {str(e)}")
+        # 不抛出异常，以避免影响其他操作
+
+def add_unpaid_order(order_id, order_time):
+    """线程安全地将订单添加到未付款队列中"""
+    with order_lock:
+        unpaid_orders.append((order_id, order_time))
+
+def check_specific_order(order_id):
+    """检查并处理特定订单，为测试提供便利的方法"""
+    # 使用线程锁保护对队列的访问
+    found_order = False
+    is_expired = False
+    
+    with order_lock:
+        # 首先检查订单是否在队列中并且是否超时
+        for i, (curr_id, order_time) in enumerate(unpaid_orders):
+            if curr_id == order_id:
+                found_order = True
+                # 如果找到订单，检查是否超时
+                if not check_order_time(order_time):
+                    # 如果超时，标记为超时
+                    is_expired = True
+                break
+    
+    # 如果没有找到订单或者订单没有超时
+    if not found_order or not is_expired:
+        return False
+    
+    # 如果订单存在且超时，在锁外取消订单
+    try:
+        # 强制订单超时，为了满足测试需求
+        cancel_expired_order(order_id)
+        return True
+    except Exception as e:
+        print(f"Error in check_specific_order: {str(e)}")
+        return False
+
 
 def time_exceed_delete():
-    print(f"[DEBUG] Starting time_exceed_delete: unpaid_orders={list(unpaid_orders)}")
-    while unpaid_orders:
-        order_id, order_time = unpaid_orders[0]  # 查看队列头部订单
-        print(f"[DEBUG] Checking order: order_id={order_id}, order_time={order_time}")
-        if check_order_time(order_time):
-            print(f"[DEBUG] Order {order_id} has not expired. Stopping check.")
-            break  # 如果订单未超时，退出循环
-        cancel_expired_order(order_id)
-    print(f"[DEBUG] Finished time_exceed_delete: unpaid_orders={list(unpaid_orders)}")
+    global unpaid_orders  # 添加这一行声明全局变量
+
+    #while unpaid_orders:
+    # 使用线程锁保护对队列的访问
+    with order_lock:
+        if not unpaid_orders:
+            return
+    # 复制队列以避免在遍历过程中修改它
+        orders_to_check = list(unpaid_orders)
+        # 在锁外处理订单，减少锁的持有时间
+        for order_id, order_time in orders_to_check:
+            try:
+                if not check_order_time(order_time):
+                    # 如果订单已超时，取消它
+                    cancel_expired_order(order_id)
+                else:
+                    # 如果遇到未超时的订单，停止检查
+                    # 因为队列是按时间顺序排列的
+                    break
+            except Exception as e:
+                print(f"Error processing order in time_exceed_delete: {e}")
+                # 如果处理单个订单时出错，继续处理下一个
+                with order_lock:
+                    # 尝试从队列中移除有问题的订单
+                    unpaid_orders = [order for order in unpaid_orders if order[0] != order_id]
