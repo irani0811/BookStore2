@@ -1,145 +1,135 @@
-# bookstore II
+# Bookstore 2.0
 
-## 功能
+Bookstore 2.0是一个基于 Flask + MySQL 的线上书店后端，实现了课程要求的 60% 基础功能，并在此基础上扩展发货/收货闭环、全文检索、自动化订单管理、推荐系统与书名提取器等高级能力。系统通过 127 条 pytest 用例和 bench/JMeter 压测验证，在 128 并发下单/支付延迟约 0.3s/0.4s，整体覆盖率 96%。
 
-要求完成功能同第一个大作业，还是40%和60%的功能要求。
+---
 
+## ✨ 功能总览
 
-## bookstore目录结构
+| 模块 | 功能点 | 说明 |
+|------|--------|------|
+| 用户 & 认证 | 注册 / 登录 / 登出 / 改密 / 充值 | PyJWT 鉴权、SQLAlchemy 事务保护余额更新 |
+| 买家流程 | 下单 → 支付 → 查询 → 取消 | `new_*` → `history_*` 生命周期管理，库存/余额原子更新 |
+| 卖家流程 | 创建店铺 / 上架图书 / 补货 / 发货 / 收货 | `stores` 冗余书籍信息，发货状态机覆盖越权与异常 |
+| 附加功能 | 发货-收货闭环、全文搜索、订单自动取消 | APScheduler 定时任务、FULLTEXT + Jaccard 搜索 |
+| 智能能力 | 书名提取器、双引擎推荐系统 | ChatLM-mini-Chinese + 正则抽取书名；共现 & 协同过滤推荐 |
+| 质量保障 | Pytest + Coverage + Bench + JMeter | 127 条用例、96% 覆盖率、TPS_C≈3.1k req/s |
+
+---
+
+## 🏗️ 架构与目录
+
 ```
-bookstore
-  |-- be                            后端
-        |-- model                     后端逻辑代码
-        |-- view                      访问后端接口
-        |-- ....
-  |-- doc                           JSON API规范说明
-  |-- fe                            前端访问与测试代码
-        |-- access
-        |-- bench                     效率测试
-        |-- data                    
-            |-- book.db                 sqlite 数据库(book.db，较少量的测试数据)
-            |-- book_lx.db              sqlite 数据库(book_lx.db， 较大量的测试数据，要从网盘下载)
-            |-- scraper.py              从豆瓣爬取的图书信息数据的代码
-        |-- test                      功能性测试（包含对前60%功能的测试，不要修改已有的文件，可以提pull request或bug）
-        |-- conf.py                   测试参数，修改这个文件以适应自己的需要
-        |-- conftest.py               pytest初始化配置，修改这个文件以适应自己的需要
-        |-- ....
-  |-- ....
+bookstore/
+├── be/                # 后端：Flask + SQLAlchemy
+│   ├── model/         # 业务实现（buyer/seller/recommend/...）
+│   ├── view/          # REST API 路由
+│   └── serve.py       # APScheduler、应用入口
+├── fe/                # 测试与脚本
+│   ├── access/        # HTTP 客户端封装
+│   ├── bench/         # 性能测试脚本
+│   ├── data/          # 导入数据与工具
+│   └── test/          # pytest 用例（用户/买家/卖家/附加功能）
+├── script/            # 运行、日志脚本
+├── requirements.txt
+└── README.md
 ```
 
-## 安装配置
-TODO 从 https://gitea.shuishan.net.cn/10225501413/CDMS.Xuan_ZHOU.2025Autumn.DaSE 获取代码，并以 bookstore 文件夹为根目录打开
+关键技术栈：
 
+- **后端**：Flask 2.x、SQLAlchemy、PyJWT、APScheduler  
+- **数据库**：MySQL 8.0（InnoDB），FULLTEXT + 组合索引  
+- **工具链**：pytest、coverage、bench、JMeter、Git
 
+---
 
-**强调一下，尽量新建干净的环境并且使用3.6或者3.7的 Python！**
+## 🚀 快速开始
 
-安装 Python (需要 Python3.6 以上) 
+### 1. 环境准备
+- Python 3.11+
+- MySQL 8.0（确保已创建目标数据库并具备写入权限）
 
-
-进入 bookstore 文件夹下：
-
-安装依赖
-
-```powershell
+```bash
+git clone <repo>
+cd bookstore
+python -m venv venv && source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Linux 和 MacOS 执行测试
+### 2. 导入基础数据
+
 ```bash
-bash script/test.sh
+# 将 SQLite 中的图书数据迁移到 MySQL
+python fe/data/create_table.py \
+  --sqlite fe/data/book.db \
+  --mysql-url mysql+pymysql://user:password@localhost:3306/bookstore
 ```
 
-Windows 执行测试参考视频：https://www.bilibili.com/video/BV1Lu4y1h7Pn/
+常用环境变量：
 
-（注意：如果提示`"RuntimeError: Not running with the Werkzeug Server"`，请输入下述命令，将 flask 和 Werkzeug 的版本均降低为2.0.0。）
+| 变量 | 说明 | 示例 |
+|------|------|------|
+| `BOOKSTORE_DB_URI` | SQLAlchemy 连接串 | `mysql+pymysql://user:pwd@127.0.0.1:3306/bookstore` |
+| `BOOKSTORE_ENABLE_PICTURE_EXPORT` | 是否导出封面图片 | `0`（默认不落盘） |
 
-```powershell
- pip install flask==2.0.0  
+### 3. 启动后端
 
- pip install Werkzeug==2.0.0
+```bash
+export FLASK_APP=be.serve  # Windows 使用 set
+flask run --host 0.0.0.0 --port 5000
 ```
 
- bookstore/fe/data/book.db中包含测试的数据，从豆瓣网抓取的图书信息，
- 其DDL为：
+APScheduler 会在启动时注册订单超时检查等后台任务。
 
-    create table book
-    (
-        id TEXT primary key,
-        title TEXT,
-        author TEXT,
-        publisher TEXT,
-        original_title TEXT,
-        translator TEXT,
-        pub_year TEXT,
-        pages INTEGER,
-        price INTEGER,
-        currency_unit TEXT,
-        binding TEXT,
-        isbn TEXT,
-        author_intro TEXT,
-        book_intro text,
-        content TEXT,
-        tags TEXT,
-        picture BLOB
-    );
+### 4. 运行测试
 
-更多的数据可以从网盘下载，下载地址为，链接：
+```bash
+pytest fe/test -n auto                 # 127 条单元 / 集成测试
+coverage run -m pytest fe/test && coverage html  # 生成 96% 覆盖率
+python fe/bench/run.py                 # bench 下单/支付压测
+sh script/test_log.sh                  # JMeter 结果解析（可选）
+```
 
-    https://pan.baidu.com/s/1bjCOW8Z5N_ClcqU54Pdt8g
+---
 
-提取码：
+## 🔍 主要接口
 
-    hj6q
+| 角色 | 路径 | 描述 |
+|------|------|------|
+| 用户 | `POST /auth/register` / `login` / `logout` / `change_password` / `add_funds` | JWT 鉴权、余额管理 |
+| 买家 | `POST /buyer/new_order` / `payment` / `cancel_order`、`GET /buyer/query_order` | 订单全流程 |
+| 卖家 | `POST /seller/create_store` / `add_book` / `add_stock_level` / `delivery_order` / `receive_order` | 店铺维护与发货收货 |
+| 搜索 | `GET /buyer/search_books` | FULLTEXT + 模糊搜索、分页 |
+| 推荐 | `GET /buyer/recommend_books`、`/recommend_books_v2` | 共现 & 协同过滤 |
+| 智能 | `POST /buyer/extract_title` | 书名提取器（ChatLM-mini-Chinese） |
 
-这份数据同bookstore/fe/data/book.db的schema相同，但是有更多的数据(约3.5GB, 40000+行)
+更多细节请参考 `bookstore2报告.md` 或 `be/view/*.py`。
 
-## 要求
+---
 
-**小组**完成下述内容：
+## 🧪 测试与性能
 
-1. 允许向接口中增加或修改参数，允许修改 HTTP 方法，允许增加新的测试接口，请尽量不要修改现有接口的 url 或删除现有接口，请根据设计合理的拓展接口（加分项+2～5分）。
-   测试程序如果有问题可以提bug （加分项，每提1个 bug +2, 提1个 pull request +5）。<br>
+- **功能测试**：127 条 pytest 用例覆盖用户、买家、卖家、推荐、搜索、发货、自动取消等场景，覆盖率 96%。  
+- **性能压测**：bench 脚本展示 TPS_C≈3.1k req/s；JMeter 对比显示 MySQL 版本吞吐量 ~10k req/s，显著优于 MongoDB 基线。  
+- **监控 & 日志**：关键事务、自动任务、推荐服务均输出结构化日志到 `logs/`，便于回溯。
 
-2. 核心数据使用关系型数据库（PostgreSQL 或 MySQL 数据库）。
-   blob 数据（如图片和大段的文字描述）可以分离出来存其它 NoSQL 数据库或文件系统。 <br>
+---
 
-3. 对所有的接口都要写 test case，通过测试并计算代码覆盖率（有较高的覆盖率是加分项 +2~5）。 <br>
+## 👥 分工
 
-4. 尽量使用正确的软件工程方法及工具，如，版本控制，测试驱动开发 （利用版本控制是加分项 +2~5）<br>
+| 成员 | 学号 | 负责内容 | 占比 |
+|------|------|----------|:----:|
+| 吴彤 | 10222140442 | 用户/买家核心接口、推荐系统、性能测试与覆盖率统计 | 50% |
+| 王惜冉 | 10235501401 | 发货/搜索/自动取消等附加功能、MySQL 迁移、书名提取器、报告与 README | 50% |
 
-5. 后端使用技术，实现语言不限；**不要复制**这个项目上的后端代码（不是正确的实践， 减分项 -2~5）<br>
+---
 
-6. 不需要实现页面 <br>
+## 📚 参考资料
 
-7. 最后评估分数时考虑以下要素：<br>
-   1）实现完整度，全部测试通过，效率合理 <br>
-   2）正确地使用数据库和设计分析工具，ER图，从ER图导出关系模式，规范化，事务处理，索引等 <br>
-   3）其它... <br>
-
-## 报告内容
-
-1. 简述从文档型数据库到关系型数据库的改动，以及改动的理由（如提高访问速度，便于编写业务逻辑代码等）
-2. 要求中提到的点，可以适当在报告中展示
-
-3. 关系数据库设计：关系型 schema
-
-4. 对60%基础功能和40%附加功能的接口、后端逻辑、数据库操作、测试用例进行介绍，展示测试结果与测试覆盖率。
-
-5. 如果完成，可以展示本次大作业的亮点，比如要求中的“3 4”两点。
-
-注：验收依据为报告，本次大作业所作的工作要完整展示在报告中。
+- [MySQL 官方文档](https://dev.mysql.com/doc/)  
+- [SQLAlchemy](https://docs.sqlalchemy.org/)  
+- [Flask](https://flask.palletsprojects.com/)  
+- [PyJWT](https://pyjwt.readthedocs.io/)  
+- [JMeter](https://jmeter.apache.org/)
 
 
-## 验收与考核准测
-
-- 提交 **代码+报告** 压缩包到 **作业提交入口**
-- 命名规则：2025_autumn_ECNU_PJ2\_学号\_姓名(.zip)
-- 提交截止日期：**2025.12.18 23:59:59**
-
-考核标准：
-1. 没有提交或没有实质的工作，得D
-2. 完成"要求"中的第1点，可得C
-3. 完成前3点，通过全部测试用例且有较高的测试覆盖率，可得B
-4. 完成前2点的基础上，体现出第3 4点，可得A
-5. 以上均为参考，最后等级会根据最终的工作质量有所调整
